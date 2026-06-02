@@ -74,6 +74,30 @@ class TestOlmSessions:
         followup = mz.encrypt_olm(outbound, "followup")
         assert mz.decrypt_olm(inbound, followup) == "followup"
 
+    def test_outbound_inbound_roundtrip_with_base64_keys(self):
+        """Matrix key APIs provide base64 strings, not key objects."""
+        alice = mz.create_account()
+        bob = mz.create_account()
+
+        mz.generate_one_time_keys(bob, 1)
+        one_time_key = next(iter(bob.one_time_keys.values()))
+
+        bob_curve25519 = mz.account_identity_keys(bob)["curve25519"]
+        otk_b64 = one_time_key.to_base64() if hasattr(one_time_key, "to_base64") else str(one_time_key)
+
+        outbound = mz.create_outbound_olm_session(alice, bob_curve25519, otk_b64)
+        prekey_message = mz.encrypt_olm(outbound, "hello from alice")
+
+        alice_curve25519 = mz.account_identity_keys(alice)["curve25519"]
+        inbound, plaintext = mz.create_inbound_olm_session(
+            bob,
+            alice_curve25519,
+            prekey_message,
+        )
+
+        assert plaintext == "hello from alice"
+        assert inbound.session_id == outbound.session_id
+
     def test_olm_session_pickle_roundtrip(self):
         alice = mz.create_account()
         bob = mz.create_account()

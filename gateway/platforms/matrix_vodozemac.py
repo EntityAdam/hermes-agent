@@ -39,6 +39,14 @@ def _key_to_base64(key: Any) -> str:
     return str(key)
 
 
+def _curve25519_public_key(value: Any) -> Any:
+    """Normalize a Curve25519 public key for vodozemac session APIs."""
+    if isinstance(value, str):
+        vz = _require_vodozemac()
+        return vz.Curve25519PublicKey.from_base64(value)
+    return value
+
+
 def _require_vodozemac() -> Any:
     if _vodozemac is None:
         raise MissingVodozemacDependencyError(
@@ -114,7 +122,10 @@ def generate_fallback_key(account: Any) -> dict[str, str]:
 
 def create_outbound_olm_session(account: Any, identity_key: str, one_time_key: str) -> Any:
     """Create an outbound Olm session to another device."""
-    return account.create_outbound_session(identity_key, one_time_key)
+    return account.create_outbound_session(
+        _curve25519_public_key(identity_key),
+        _curve25519_public_key(one_time_key),
+    )
 
 
 def create_inbound_olm_session(account: Any, identity_key: str, prekey_message: Any) -> tuple[Any, str]:
@@ -125,7 +136,10 @@ def create_inbound_olm_session(account: Any, identity_key: str, prekey_message: 
         if converted is None:
             raise ValueError("Inbound session creation requires a pre-key message")
         message = converted
-    session, plaintext = account.create_inbound_session(identity_key, message)
+    session, plaintext = account.create_inbound_session(
+        _curve25519_public_key(identity_key),
+        message,
+    )
     return session, _to_text(plaintext)
 
 

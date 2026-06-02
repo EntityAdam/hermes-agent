@@ -225,7 +225,11 @@ class NativeVodozemacE2EE:
                 outbound = _OutboundMegolmState(session=mv.create_outbound_megolm_session())
                 self._outbound_group_sessions[room_id] = outbound
 
-            await self._share_room_key_with_members_locked(room_id, outbound)
+            shared_ok = await self._share_room_key_with_members_locked(room_id, outbound)
+            if not shared_ok:
+                raise RuntimeError(
+                    f"Matrix E2EE: could not share room key for room {room_id}; refusing to send unreadable ciphertext"
+                )
 
             payload = {
                 "type": event_type,
@@ -266,10 +270,14 @@ class NativeVodozemacE2EE:
         self,
         room_id: str,
         outbound: _OutboundMegolmState,
-    ) -> None:
+    ) -> bool:
         device_map = await self._fetch_room_device_identities(room_id)
         if not device_map:
-            return
+            logger.warning(
+                "Matrix E2EE: no device keys available for room %s; cannot share room key",
+                room_id,
+            )
+            return bool(outbound.shared_with)
 
         room_key_payload = {
             "algorithm": _MEGOLM_ALGORITHM,
@@ -338,12 +346,17 @@ class NativeVodozemacE2EE:
             newly_shared.append(share_id)
 
         if not to_device_messages:
-            return
+            logger.warning(
+                "Matrix E2EE: unable to establish Olm sessions for any recipients in room %s",
+                room_id,
+            )
+            return bool(outbound.shared_with)
 
         await self._maybe_await(
             self._client.send_to_device(self._to_device_event_type(), to_device_messages)
         )
         outbound.shared_with.update(newly_shared)
+        return True
 
     async def _ensure_olm_session_locked(
         self,
