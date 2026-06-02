@@ -123,6 +123,22 @@ class TestMegolmSessions:
         assert plaintext == "group hello"
         assert index == 0
 
+    def test_group_encrypt_decrypt_with_base64_session_key(self):
+        """Matrix m.room_key events provide session_key as base64 text."""
+        outbound = mz.create_outbound_megolm_session()
+        session_key = (
+            outbound.session_key.to_base64()
+            if hasattr(outbound.session_key, "to_base64")
+            else str(outbound.session_key)
+        )
+        inbound = mz.create_inbound_megolm_session(session_key)
+
+        ciphertext = mz.encrypt_megolm(outbound, "group hello")
+        plaintext, index = mz.decrypt_megolm(inbound, ciphertext)
+
+        assert plaintext == "group hello"
+        assert index == 0
+
     def test_group_pickle_roundtrip(self):
         outbound = mz.create_outbound_megolm_session()
         inbound = mz.create_inbound_megolm_session(outbound.session_key)

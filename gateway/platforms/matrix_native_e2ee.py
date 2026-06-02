@@ -123,7 +123,7 @@ class NativeVodozemacE2EE:
                     str(own_cipher.get("body", "")),
                 )
             except Exception as exc:
-                logger.debug("Matrix E2EE: invalid to-device Olm payload: %s", exc)
+                logger.warning("Matrix E2EE: invalid to-device Olm payload: %s", exc)
                 return
 
             plaintext: str | None = None
@@ -143,7 +143,7 @@ class NativeVodozemacE2EE:
                         message,
                     )
                 except Exception as exc:
-                    logger.debug("Matrix E2EE: cannot establish inbound Olm session: %s", exc)
+                    logger.warning("Matrix E2EE: cannot establish inbound Olm session: %s", exc)
                     return
 
                 self._olm_sessions[sender_key] = session
@@ -176,7 +176,7 @@ class NativeVodozemacE2EE:
             try:
                 inbound = mv.create_inbound_megolm_session(session_key)
             except Exception as exc:
-                logger.debug("Matrix E2EE: invalid room key payload: %s", exc)
+                logger.warning("Matrix E2EE: invalid room key payload: %s", exc)
                 self._save_state_locked()
                 return
 
@@ -198,12 +198,24 @@ class NativeVodozemacE2EE:
         async with self._lock:
             session = self._inbound_group_sessions.get((room_id, sender_key, session_id))
             if session is None:
+                logger.warning(
+                    "Matrix E2EE: missing inbound Megolm session for room=%s sender_key=%s session_id=%s",
+                    room_id,
+                    sender_key,
+                    session_id,
+                )
                 return None
 
             try:
                 plaintext, _ = mv.decrypt_megolm(session, ciphertext)
                 payload = json.loads(plaintext)
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "Matrix E2EE: failed to decrypt Megolm event for room=%s session_id=%s: %s",
+                    room_id,
+                    session_id,
+                    exc,
+                )
                 return None
 
             self._save_state_locked()

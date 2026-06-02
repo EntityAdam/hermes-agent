@@ -47,6 +47,14 @@ def _curve25519_public_key(value: Any) -> Any:
     return value
 
 
+def _megolm_session_key(value: Any) -> Any:
+    """Normalize a Megolm SessionKey for inbound group session creation."""
+    if isinstance(value, str):
+        vz = _require_vodozemac()
+        return vz.SessionKey(value)
+    return value
+
+
 def _require_vodozemac() -> Any:
     if _vodozemac is None:
         raise MissingVodozemacDependencyError(
@@ -162,7 +170,7 @@ def create_outbound_megolm_session() -> Any:
 def create_inbound_megolm_session(session_key: str) -> Any:
     """Create an inbound Megolm session from a base64 session key."""
     vz = _require_vodozemac()
-    return vz.InboundGroupSession(session_key)
+    return vz.InboundGroupSession(_megolm_session_key(session_key))
 
 
 def import_inbound_megolm_session(exported_session_key: str) -> Any:
