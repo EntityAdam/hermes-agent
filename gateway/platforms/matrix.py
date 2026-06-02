@@ -140,8 +140,7 @@ _OUTBOUND_MENTION_RE = re.compile(
 )
 
 _E2EE_INSTALL_HINT = (
-    "Install with: pip install 'hermes-agent[matrix]'  "
-    "(or: pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks)"
+    "Install with: pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks"
 )
 
 _MATRIX_IMAGE_FILENAME_EXTS = frozenset({
@@ -219,21 +218,35 @@ def _create_matrix_session(proxy_url: str | None):
 def _check_e2ee_deps() -> bool:
     """Return True if Matrix E2EE dependencies are available.
 
-    Verifies vodozemac bindings are importable and expose core Olm/Megolm
-    primitives, plus the mautrix crypto store backend and the DB drivers
-    used at connect time (``asyncpg`` and ``aiosqlite``).
+    Verifies the vodozemac bindings and DB drivers required by Hermes' Matrix
+    E2EE path are importable.
 
-    Without the full set, encrypted rooms fail at connect time with runtime
-    import errors (for example ``No module named 'asyncpg'``).
+    This check intentionally does not require ``mautrix.crypto`` imports,
+    because those currently pull the legacy python-olm/libolm stack.
     """
     try:
         if not has_required_bindings():
             return False
 
-        from mautrix.crypto import OlmMachine  # noqa: F401
-        from mautrix.crypto.store.asyncpg import PgCryptoStore  # noqa: F401
         import asyncpg  # noqa: F401
         import aiosqlite  # noqa: F401
+
+        return True
+    except (ImportError, AttributeError):
+        return False
+
+
+def _has_mautrix_crypto_backend() -> bool:
+    """Return True when mautrix's legacy crypto backend is importable.
+
+    Current mautrix releases use python-olm/libolm for ``mautrix.crypto``.
+    Hermes keeps this probe so it can degrade gracefully when users install
+    only the vodozemac stack.
+    """
+    try:
+        from mautrix.crypto import OlmMachine  # noqa: F401
+        from mautrix.crypto.store.asyncpg import PgCryptoStore  # noqa: F401
+        from mautrix.util.async_db import Database  # noqa: F401
 
         return True
     except (ImportError, AttributeError):
@@ -298,8 +311,9 @@ def check_matrix_requirements() -> bool:
         if not ensure_and_bind("platform.matrix", _import, globals(), prompt=False):
             logger.warning(
                 "Matrix: required packages not installed (%s). "
-                "Run: pip install 'hermes-agent[matrix]'",
+                "Run: %s",
                 ", ".join(missing) if missing else "platform.matrix",
+                _E2EE_INSTALL_HINT,
             )
             return False
 
@@ -736,6 +750,16 @@ class MatrixAdapter(BasePlatformAdapter):
                 )
                 await api.session.close()
                 return False
+            if not _has_mautrix_crypto_backend():
+                logger.warning(
+                    "Matrix: MATRIX_ENCRYPTION=true but the installed mautrix crypto "
+                    "backend is unavailable without python-olm/libolm. Hermes will "
+                    "continue without E2EE for now. "
+                    "Installed Matrix deps: %s",
+                    _E2EE_INSTALL_HINT,
+                )
+                self._encryption = False
+        if self._encryption:
             try:
                 from mautrix.crypto import OlmMachine
                 from mautrix.crypto.store.asyncpg import PgCryptoStore

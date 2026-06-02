@@ -22,6 +22,14 @@ except Exception:  # pragma: no cover - exercised when dependency is absent
     _vodozemac = None
 
 
+def _to_bytes(value: bytes | str) -> bytes:
+    return value if isinstance(value, bytes) else value.encode("utf-8")
+
+
+def _to_text(value: bytes | str) -> str:
+    return value.decode("utf-8") if isinstance(value, bytes) else value
+
+
 def _require_vodozemac() -> Any:
     if _vodozemac is None:
         raise MissingVodozemacDependencyError(
@@ -72,7 +80,10 @@ def account_identity_keys(account: Any) -> dict[str, str]:
 
 def sign(account: Any, message: str) -> str:
     """Sign a UTF-8 message with the account ed25519 key."""
-    return account.sign(message)
+    signature = account.sign(_to_bytes(message))
+    if hasattr(signature, "to_base64"):
+        return signature.to_base64()
+    return _to_text(signature)
 
 
 def generate_one_time_keys(account: Any, count: int) -> dict[str, str]:
@@ -99,17 +110,24 @@ def create_outbound_olm_session(account: Any, identity_key: str, one_time_key: s
 
 def create_inbound_olm_session(account: Any, identity_key: str, prekey_message: Any) -> tuple[Any, str]:
     """Create an inbound Olm session from an incoming pre-key message."""
-    return account.create_inbound_session(identity_key, prekey_message)
+    message = prekey_message
+    if hasattr(prekey_message, "to_pre_key"):
+        converted = prekey_message.to_pre_key()
+        if converted is None:
+            raise ValueError("Inbound session creation requires a pre-key message")
+        message = converted
+    session, plaintext = account.create_inbound_session(identity_key, message)
+    return session, _to_text(plaintext)
 
 
 def encrypt_olm(session: Any, plaintext: str) -> Any:
     """Encrypt plaintext with an Olm session."""
-    return session.encrypt(plaintext)
+    return session.encrypt(_to_bytes(plaintext))
 
 
 def decrypt_olm(session: Any, message: Any) -> str:
     """Decrypt an Olm message with an existing session."""
-    return session.decrypt(message)
+    return _to_text(session.decrypt(message))
 
 
 def create_outbound_megolm_session() -> Any:
@@ -132,13 +150,13 @@ def import_inbound_megolm_session(exported_session_key: str) -> Any:
 
 def encrypt_megolm(session: Any, plaintext: str) -> str:
     """Encrypt plaintext into a base64 Megolm message."""
-    return session.encrypt(plaintext)
+    return _to_text(session.encrypt(_to_bytes(plaintext)))
 
 
 def decrypt_megolm(session: Any, ciphertext: str) -> tuple[str, int]:
     """Decrypt a Megolm message and return plaintext with message index."""
     decrypted = session.decrypt(ciphertext)
-    return decrypted.plaintext, int(decrypted.message_index)
+    return _to_text(decrypted.plaintext), int(decrypted.message_index)
 
 
 def pickle_account(account: Any, pickle_key: bytes | str) -> str:

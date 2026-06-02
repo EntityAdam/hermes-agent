@@ -6787,7 +6787,10 @@ class GatewayRunner:
         elif platform == Platform.MATRIX:
             from gateway.platforms.matrix import MatrixAdapter, check_matrix_requirements
             if not check_matrix_requirements():
-                logger.warning("Matrix: dependencies not installed or credentials not set. Run: pip install 'hermes-agent[matrix]'")
+                logger.warning(
+                    "Matrix: dependencies not installed or credentials not set. "
+                    "Run: pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks"
+                )
                 return None
             return MatrixAdapter(config)
 

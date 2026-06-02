@@ -3701,7 +3701,8 @@ _PLATFORMS = [
             "   Or via API: curl -X POST https://your-server/_matrix/client/v3/login \\",
             '     -d \'{"type":"m.login.password","user":"@bot:server","password":"..."}\'',
             "4. Alternatively, provide user ID + password and Hermes will log in directly",
-            "5. For E2EE: set MATRIX_ENCRYPTION=true (install with pip install 'hermes-agent[matrix]')",
+            "5. For E2EE: set MATRIX_ENCRYPTION=true and install:",
+            "   pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks",
             "6. To find your user ID: it's @username:your-server (shown in Element profile)",
         ],
         "vars": [

@@ -245,8 +245,8 @@ E2EE 需要 Matrix Python 运行时依赖（`mautrix` + `vodozemac`）：
 # 直接安装 Matrix 运行时依赖
 pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
 
-# 或通过 hermes extras 安装
-pip install 'hermes-agent[matrix]'
+# Matrix 运行时依赖
+pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
 ```
 
 ### 启用 E2EE
@@ -411,10 +411,10 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
 ```
 
-或通过 Hermes extras：
+或直接安装 Matrix 运行时依赖：
 
 ```bash
-pip install 'hermes-agent[matrix]'
+pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
 ```
 
 ### 加密错误/"无法解密事件"
@@ -575,7 +575,7 @@ services:
 ```dockerfile
 FROM python:3.11-slim
 
-RUN pip install 'hermes-agent[matrix]'
+RUN pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
 
 CMD ["hermes", "gateway"]
 ```

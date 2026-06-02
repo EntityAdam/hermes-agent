@@ -1912,6 +1912,13 @@ def _setup_matrix():
                     if result.stderr:
                         print_info(f"  Error: {result.stderr.strip().splitlines()[-1]}")
 
+        if want_e2ee:
+            print_warning(
+                "Matrix E2EE is in transition to vodozemac in Hermes. "
+                "If your installed mautrix build lacks a compatible crypto backend, "
+                "Hermes will continue in non-E2EE mode instead of failing startup."
+            )
+
         print()
         print_info("🔒 Security: Restrict who can use your bot")
         print_info("   Matrix user IDs look like @username:server")
