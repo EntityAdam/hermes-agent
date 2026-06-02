@@ -56,6 +56,7 @@ class NativeVodozemacE2EE:
         self._inbound_group_sessions: dict[tuple[str, str, str], Any] = {}
         self._outbound_group_sessions: dict[str, _OutboundMegolmState] = {}
         self._device_curve_cache: dict[tuple[str, str], str] = {}
+        self._device_ed25519_cache: dict[tuple[str, str], str] = {}
         self._room_encryption_cache: dict[str, bool] = {}
 
         self._lock = asyncio.Lock()
@@ -67,6 +68,11 @@ class NativeVodozemacE2EE:
             if self._account is None:
                 self._account = mv.create_account()
                 self._refresh_identity_keys_locked()
+
+            # Re-share outbound room keys after restart so devices can recover
+            # from stale/missed to-device delivery and prior payload bugs.
+            for state in self._outbound_group_sessions.values():
+                state.shared_with.clear()
 
             await self._upload_keys_locked(include_device_keys=True)
             self._save_state_locked()
@@ -261,7 +267,7 @@ class NativeVodozemacE2EE:
         room_id: str,
         outbound: _OutboundMegolmState,
     ) -> None:
-        device_map = await self._fetch_room_device_curve_keys(room_id)
+        device_map = await self._fetch_room_device_identities(room_id)
         if not device_map:
             return
 
@@ -269,16 +275,25 @@ class NativeVodozemacE2EE:
             "algorithm": _MEGOLM_ALGORITHM,
             "room_id": room_id,
             "session_id": str(outbound.session.session_id),
-            "session_key": str(outbound.session.session_key),
+            "session_key": self._session_key_to_base64(outbound.session.session_key),
         }
 
         to_device_messages: dict[str, dict[str, dict[str, Any]]] = {}
         newly_shared: list[str] = []
 
-        for (user_id, device_id), curve25519 in device_map.items():
+        for (user_id, device_id), identities in device_map.items():
+            curve25519 = identities.get("curve25519", "")
+            recipient_ed25519 = identities.get("ed25519", "")
             if not user_id or not device_id or not curve25519:
                 continue
             if user_id == self._user_id and device_id == self._device_id:
+                continue
+            if not recipient_ed25519:
+                logger.debug(
+                    "Matrix E2EE: skipping device without ed25519 key: %s / %s",
+                    user_id,
+                    device_id,
+                )
                 continue
 
             share_id = f"{user_id}|{device_id}"
@@ -292,6 +307,15 @@ class NativeVodozemacE2EE:
             plaintext = self._canonical_json(
                 {
                     "type": "m.room_key",
+                    "sender": self._user_id,
+                    "sender_device": self._device_id,
+                    "keys": {
+                        "ed25519": self._ed25519,
+                    },
+                    "recipient": user_id,
+                    "recipient_keys": {
+                        "ed25519": recipient_ed25519,
+                    },
                     "content": room_key_payload,
                 }
             )
@@ -361,7 +385,10 @@ class NativeVodozemacE2EE:
         self._olm_sessions[curve25519] = session
         return session
 
-    async def _fetch_room_device_curve_keys(self, room_id: str) -> dict[tuple[str, str], str]:
+    async def _fetch_room_device_identities(
+        self,
+        room_id: str,
+    ) -> dict[tuple[str, str], dict[str, str]]:
         members = await self._maybe_await(self._client.get_joined_members(room_id))
         user_ids = [str(user_id) for user_id in (members or {}).keys()]
         if not user_ids:
@@ -370,7 +397,7 @@ class NativeVodozemacE2EE:
         query = await self._maybe_await(self._client.query_keys(set(user_ids)))
         device_keys = getattr(query, "device_keys", {}) or {}
 
-        resolved: dict[tuple[str, str], str] = {}
+        resolved: dict[tuple[str, str], dict[str, str]] = {}
         for user_id, devices in device_keys.items():
             if not isinstance(devices, dict):
                 continue
@@ -378,9 +405,15 @@ class NativeVodozemacE2EE:
                 curve = self._extract_curve25519_key(device)
                 if not curve:
                     continue
+                ed25519 = self._extract_ed25519_key(device)
                 key = (str(user_id), str(device_id))
-                resolved[key] = curve
+                resolved[key] = {
+                    "curve25519": curve,
+                    "ed25519": ed25519,
+                }
                 self._device_curve_cache[key] = curve
+                if ed25519:
+                    self._device_ed25519_cache[key] = ed25519
 
         return resolved
 
@@ -489,12 +522,20 @@ class NativeVodozemacE2EE:
             )
 
         self._device_curve_cache.clear()
+        self._device_ed25519_cache.clear()
         for key, curve in (raw.get("device_curve_cache") or {}).items():
             if not isinstance(key, str) or not isinstance(curve, str):
                 continue
             user_id, device_id = self._split_key(key, expected=2)
             if user_id and device_id:
                 self._device_curve_cache[(user_id, device_id)] = curve
+
+        for key, ed25519 in (raw.get("device_ed25519_cache") or {}).items():
+            if not isinstance(key, str) or not isinstance(ed25519, str):
+                continue
+            user_id, device_id = self._split_key(key, expected=2)
+            if user_id and device_id:
+                self._device_ed25519_cache[(user_id, device_id)] = ed25519
 
     def _save_state_locked(self) -> None:
         if self._account is None:
@@ -524,6 +565,10 @@ class NativeVodozemacE2EE:
             "device_curve_cache": {
                 self._join_key(user_id, device_id): curve
                 for (user_id, device_id), curve in self._device_curve_cache.items()
+            },
+            "device_ed25519_cache": {
+                self._join_key(user_id, device_id): ed25519
+                for (user_id, device_id), ed25519 in self._device_ed25519_cache.items()
             },
         }
 
@@ -561,6 +606,28 @@ class NativeVodozemacE2EE:
             if str(key_id).startswith("curve25519:"):
                 return str(value)
         return ""
+
+    @staticmethod
+    def _extract_ed25519_key(device_keys_obj: Any) -> str:
+        keys = getattr(device_keys_obj, "keys", None)
+        if keys is None and isinstance(device_keys_obj, dict):
+            keys = device_keys_obj.get("keys")
+
+        if not isinstance(keys, dict):
+            return ""
+
+        for key_id, value in keys.items():
+            if str(key_id).startswith("ed25519:"):
+                return str(value)
+        return ""
+
+    @staticmethod
+    def _session_key_to_base64(session_key: Any) -> str:
+        if isinstance(session_key, str):
+            return session_key
+        if hasattr(session_key, "to_base64"):
+            return session_key.to_base64()
+        return str(session_key)
 
     @staticmethod
     def _signed_curve_key_algorithm() -> Any:
