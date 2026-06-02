@@ -140,6 +140,7 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
         "aiosqlite==0.22.1",
         "asyncpg==0.31.0",
         "aiohttp-socks==0.11.0",
+        "cryptography==46.0.3",
     ),
     "platform.dingtalk": (
         "dingtalk-stream==0.24.3",

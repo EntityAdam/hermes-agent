@@ -1422,7 +1422,7 @@ async def _send_matrix_via_adapter(pconfig, chat_id, message, media_files=None, 
         return {
             "error": (
                 "Matrix dependencies not installed. Run: "
-                "pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks"
+                "pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks cryptography"
             )
         }
 

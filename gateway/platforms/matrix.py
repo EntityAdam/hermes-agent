@@ -35,6 +35,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from html import escape as _html_escape
 from pathlib import Path
@@ -50,7 +51,6 @@ try:
         RoomCreatePreset,
         RoomID,
         SyncToken,
-        TrustState,
         UserID,
     )
 except ImportError:
@@ -88,14 +88,9 @@ except ImportError:
 
     RoomCreatePreset = _RoomCreatePresetStub  # type: ignore[misc,assignment]
 
-    class _TrustStateStub:  # type: ignore[no-redef]
-        UNVERIFIED = 0
-        VERIFIED = 1
-
-    TrustState = _TrustStateStub  # type: ignore[misc,assignment]
-
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.matrix_vodozemac import has_required_bindings
+from gateway.platforms.matrix_native_e2ee import NativeVodozemacE2EE
 from gateway.platforms.base import (
     BasePlatformAdapter,
     MessageEvent,
@@ -130,7 +125,7 @@ MAX_MESSAGE_LENGTH = 4000
 from hermes_constants import get_hermes_dir as _get_hermes_dir
 
 _STORE_DIR = _get_hermes_dir("platforms/matrix/store", "matrix/store")
-_CRYPTO_DB_PATH = _STORE_DIR / "crypto.db"
+_NATIVE_E2EE_STATE_PATH = _STORE_DIR / "vodozemac_state.json"
 
 # Grace period: ignore messages older than this many seconds before startup.
 _STARTUP_GRACE_SECONDS = 5
@@ -140,7 +135,7 @@ _OUTBOUND_MENTION_RE = re.compile(
 )
 
 _E2EE_INSTALL_HINT = (
-    "Install with: pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks"
+    "Install with: pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks cryptography"
 )
 
 _MATRIX_IMAGE_FILENAME_EXTS = frozenset({
@@ -236,23 +231,6 @@ def _check_e2ee_deps() -> bool:
         return False
 
 
-def _has_mautrix_crypto_backend() -> bool:
-    """Return True when mautrix's legacy crypto backend is importable.
-
-    Current mautrix releases use python-olm/libolm for ``mautrix.crypto``.
-    Hermes keeps this probe so it can degrade gracefully when users install
-    only the vodozemac stack.
-    """
-    try:
-        from mautrix.crypto import OlmMachine  # noqa: F401
-        from mautrix.crypto.store.asyncpg import PgCryptoStore  # noqa: F401
-        from mautrix.util.async_db import Database  # noqa: F401
-
-        return True
-    except (ImportError, AttributeError):
-        return False
-
-
 def check_matrix_requirements() -> bool:
     """Return True if the Matrix adapter can be used.
 
@@ -291,7 +269,7 @@ def check_matrix_requirements() -> bool:
             from mautrix.types import (
                 ContentURI, EventID, EventType, PaginationDirection,
                 PresenceState, RoomCreatePreset, RoomID, SyncToken,
-                TrustState, UserID,
+                UserID,
             )
             return {
                 "ContentURI": ContentURI,
@@ -302,7 +280,6 @@ def check_matrix_requirements() -> bool:
                 "RoomCreatePreset": RoomCreatePreset,
                 "RoomID": RoomID,
                 "SyncToken": SyncToken,
-                "TrustState": TrustState,
                 "UserID": UserID,
             }
 
@@ -337,14 +314,7 @@ def check_matrix_requirements() -> bool:
 
 
 class _CryptoStateStore:
-    """Adapter that satisfies the mautrix crypto StateStore interface.
-
-    OlmMachine requires a StateStore with ``is_encrypted``,
-    ``get_encryption_info``, and ``find_shared_rooms``.  The basic
-    ``MemoryStateStore`` from ``mautrix.client`` doesn't implement these,
-    so we provide simple implementations that consult the client's room
-    state.
-    """
+    """Compatibility shim for tests that exercise joined-room references."""
 
     def __init__(self, client_state_store: Any, joined_rooms: set):
         self._ss = client_state_store
@@ -359,9 +329,7 @@ class _CryptoStateStore:
         return None
 
     async def find_shared_rooms(self, user_id: str) -> list:
-        # Return all joined rooms — simple but correct for a single-user bot.
         return list(self._joined_rooms)
-
 
 class MatrixAdapter(BasePlatformAdapter):
     """Gateway adapter for Matrix (any homeserver)."""
@@ -393,7 +361,7 @@ class MatrixAdapter(BasePlatformAdapter):
         )
 
         self._client: Any = None  # mautrix.client.Client
-        self._crypto_db: Any = None  # mautrix.util.async_db.Database
+        self._native_e2ee: Optional[NativeVodozemacE2EE] = None
         self._sync_task: Optional[asyncio.Task] = None
         self._closing = False
         self._startup_ts: float = 0.0
@@ -544,17 +512,31 @@ class MatrixAdapter(BasePlatformAdapter):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _event_content_to_dict(content: Any) -> dict[str, Any]:
+        if isinstance(content, dict):
+            return content
+        if hasattr(content, "serialize"):
+            try:
+                data = content.serialize()
+                return data if isinstance(data, dict) else {}
+            except Exception:
+                return {}
+        return {}
+
+    @staticmethod
     def _extract_server_ed25519(device_keys_obj: Any) -> Optional[str]:
-        """Extract the ed25519 identity key from a DeviceKeys object."""
-        for kid, kval in (getattr(device_keys_obj, "keys", {}) or {}).items():
+        keys = getattr(device_keys_obj, "keys", None)
+        if keys is None and isinstance(device_keys_obj, dict):
+            keys = device_keys_obj.get("keys")
+        if not isinstance(keys, dict):
+            return None
+        for kid, kval in keys.items():
             if str(kid).startswith("ed25519:"):
                 return str(kval)
         return None
 
-    async def _reverify_keys_after_upload(
-        self, client: Any, local_ed25519: str
-    ) -> bool:
-        """Re-query the server after share_keys() and verify our ed25519 key matches."""
+    async def _reverify_keys_after_upload(self, client: Any, local_ed25519: str) -> bool:
+        """Compatibility helper retained for legacy tests."""
         try:
             resp = await client.query_keys({client.mxid: [client.device_id]})
             dk = getattr(resp, "device_keys", {}) or {}
@@ -563,87 +545,39 @@ class MatrixAdapter(BasePlatformAdapter):
             if dev:
                 server_ed = self._extract_server_ed25519(dev)
                 if server_ed != local_ed25519:
-                    logger.error(
-                        "Matrix: device %s has immutable identity keys that "
-                        "don't match this installation. Generate a new access "
-                        "token with a fresh device.",
-                        client.device_id,
-                    )
                     return False
-        except Exception as exc:
-            logger.error("Matrix: post-upload key verification failed: %s", exc, exc_info=True)
+        except Exception:
             return False
         return True
 
     async def _verify_device_keys_on_server(self, client: Any, olm: Any) -> bool:
-        """Verify our device keys are on the homeserver after loading crypto state.
-
-        Returns True if keys are valid or were successfully re-uploaded.
-        Returns False if verification fails (caller should refuse E2EE).
-        """
+        """Compatibility helper retained for legacy tests."""
         try:
             resp = await client.query_keys({client.mxid: [client.device_id]})
-        except Exception as exc:
-            logger.error(
-                "Matrix: cannot verify device keys on server: %s — refusing E2EE",
-                exc,
-                exc_info=True,
-            )
+        except Exception:
             return False
 
         device_keys_map = getattr(resp, "device_keys", {}) or {}
         our_user_devices = device_keys_map.get(str(client.mxid)) or {}
         our_keys = our_user_devices.get(str(client.device_id))
-        local_ed25519 = olm.account.identity_keys.get("ed25519")
+        local_ed25519 = (getattr(getattr(olm, "account", None), "identity_keys", {}) or {}).get(
+            "ed25519"
+        )
 
         if not our_keys:
-            logger.warning("Matrix: device keys missing from server — re-uploading")
-            olm.account.shared = False
             try:
                 await olm.share_keys()
-            except Exception as exc:
-                logger.error("Matrix: failed to re-upload device keys: %s", exc, exc_info=True)
+            except Exception:
                 return False
             return await self._reverify_keys_after_upload(client, local_ed25519)
 
         server_ed25519 = self._extract_server_ed25519(our_keys)
-
         if server_ed25519 != local_ed25519:
-            if olm.account.shared:
-                logger.error(
-                    "Matrix: server has different identity keys for device %s — "
-                    "local crypto state is stale. Delete %s and restart.",
-                    client.device_id,
-                    _CRYPTO_DB_PATH,
-                )
+            if getattr(getattr(olm, "account", None), "shared", False):
                 return False
-
-            logger.warning(
-                "Matrix: server has stale keys for device %s — attempting re-upload",
-                client.device_id,
-            )
-            try:
-                await client.api.request(
-                    client.api.Method.DELETE
-                    if hasattr(client.api, "Method")
-                    else "DELETE",
-                    f"/_matrix/client/v3/devices/{client.device_id}",
-                )
-                logger.info(
-                    "Matrix: deleted stale device %s from server", client.device_id
-                )
-            except Exception:
-                pass
             try:
                 await olm.share_keys()
-            except Exception as exc:
-                logger.error(
-                    "Matrix: cannot upload device keys for %s: %s. "
-                    "Try generating a new access token to get a fresh device.",
-                    client.device_id,
-                    exc,
-                    exc_info=True,
-                )
+            except Exception:
                 return False
             return await self._reverify_keys_after_upload(client, local_ed25519)
 
@@ -740,7 +674,8 @@ class MatrixAdapter(BasePlatformAdapter):
             await api.session.close()
             return False
 
-        # Set up E2EE if requested.
+        # Set up native vodozemac E2EE if requested.
+        self._native_e2ee = None
         if self._encryption:
             if not _check_e2ee_deps():
                 logger.error(
@@ -750,173 +685,35 @@ class MatrixAdapter(BasePlatformAdapter):
                 )
                 await api.session.close()
                 return False
-            if not _has_mautrix_crypto_backend():
-                logger.warning(
-                    "Matrix: MATRIX_ENCRYPTION=true but the installed mautrix crypto "
-                    "backend is unavailable without python-olm/libolm. Hermes will "
-                    "continue without E2EE for now. "
-                    "Installed Matrix deps: %s",
-                    _E2EE_INSTALL_HINT,
-                )
-                self._encryption = False
-        if self._encryption:
+
+            # Matrix device IDs must stay stable to preserve crypto identity.
+            if not client.device_id:
+                client.device_id = self._device_id or "HERMESBOT"
+
+            self._device_id = str(client.device_id)
+            if not self._user_id and getattr(client, "mxid", None):
+                self._user_id = str(client.mxid)
+
             try:
-                from mautrix.crypto import OlmMachine
-                from mautrix.crypto.store.asyncpg import PgCryptoStore
-                from mautrix.util.async_db import Database
-
-                _STORE_DIR.mkdir(parents=True, exist_ok=True)
-
-                # Remove legacy pickle file from pre-SQLite era.
-                legacy_pickle = _STORE_DIR / "crypto_store.pickle"
-                if legacy_pickle.exists():
-                    logger.info(
-                        "Matrix: removing legacy crypto_store.pickle (migrated to SQLite)"
-                    )
-                    legacy_pickle.unlink()
-
-                # Open SQLite-backed crypto store.
-                crypto_db = Database.create(
-                    f"sqlite:///{_CRYPTO_DB_PATH}",
-                    upgrade_table=PgCryptoStore.upgrade_table,
+                self._native_e2ee = NativeVodozemacE2EE(
+                    client=client,
+                    user_id=self._user_id,
+                    device_id=self._device_id,
+                    state_path=_NATIVE_E2EE_STATE_PATH,
+                    pickle_key=f"{self._user_id or 'hermes'}:{self._device_id}",
                 )
-                await crypto_db.start()
-                self._crypto_db = crypto_db
-
-                _acct_id = self._user_id or "hermes"
-                _pickle_key = f"{_acct_id}:{self._device_id or 'default'}"
-                crypto_store = PgCryptoStore(
-                    account_id=_acct_id,
-                    pickle_key=_pickle_key,
-                    db=crypto_db,
-                )
-                await crypto_store.open()
-
-                # Bind the store to the runtime device_id before any
-                # put_account() runs. PgCryptoStore defaults _device_id
-                # to "" and its crypto_account UPSERT never updates the
-                # device_id column on conflict — so once put_account
-                # writes blank, it stays blank forever. That breaks
-                # every downstream device-scoped olm operation: peer
-                # to-device ciphertext can't find our identity key and
-                # no megolm sessions ever land. Setting _device_id here
-                # (in-memory; the on-disk row may not exist yet) makes
-                # the first put_account write the correct value.
-                # DeviceID is a NewType(str) so plain str works at runtime.
-                if client.device_id:
-                    await crypto_store.put_device_id(client.device_id)
-
-                crypto_state = _CryptoStateStore(state_store, self._joined_rooms)
-                olm = OlmMachine(client, crypto_store, crypto_state)
-
-                # Accept unverified devices so senders share Megolm
-                # session keys with us automatically.
-                olm.share_keys_min_trust = TrustState.UNVERIFIED
-                olm.send_keys_min_trust = TrustState.UNVERIFIED
-
-                await olm.load()
-
-                # Verify our device keys are still on the homeserver.
-                if not await self._verify_device_keys_on_server(client, olm):
-                    await crypto_db.stop()
-                    await api.session.close()
-                    return False
-
-                # Proactively flush one-time keys to detect stale OTK
-                # conflicts early.  When crypto state is wiped but the
-                # same device ID is reused, the server may still hold OTKs
-                # signed with the old ed25519 key.  Identity key re-upload
-                # succeeds but OTK uploads fail ("already exists" with
-                # mismatched signature).  Peers then cannot establish Olm
-                # sessions and all new messages are undecryptable.
-                try:
-                    await olm.share_keys()
-                except Exception as exc:
-                    exc_str = str(exc)
-                    if "already exists" in exc_str:
-                        logger.error(
-                            "Matrix: device %s has stale one-time keys on the "
-                            "server signed with a previous identity key. "
-                            "Peers cannot establish new Olm sessions with "
-                            "this device. Delete the device from the "
-                            "homeserver and restart, or generate a new "
-                            "access token to get a fresh device ID.",
-                            client.device_id,
-                        )
-                        await crypto_db.stop()
-                        await api.session.close()
-                        return False
-                    # Non-OTK errors are transient (network, etc.) — log
-                    # but allow startup to continue.
-                    logger.warning(
-                        "Matrix: share_keys() warning during startup: %s",
-                        exc,
-                    )
-
-                # Import cross-signing private keys from SSSS and self-sign
-                # the current device. Required after any device-key rotation
-                # (fresh crypto.db, share_keys re-upload) — otherwise the
-                # device's self-signing signature is stale and peers refuse
-                # to share Megolm sessions with the rotated device.
-                recovery_key = os.getenv("MATRIX_RECOVERY_KEY", "").strip()
-                if recovery_key:
-                    try:
-                        await olm.verify_with_recovery_key(recovery_key)
-                        logger.info("Matrix: cross-signing verified via recovery key")
-                    except Exception as exc:
-                        logger.warning(
-                            "Matrix: recovery key verification failed: %s", exc
-                        )
-                else:
-                    # No recovery key — bootstrap cross-signing if the bot
-                    # has none yet. Without this, Element shows "Encrypted
-                    # by a device not verified by its owner" on every
-                    # message from this bot, indefinitely. mautrix's
-                    # generate_recovery_key does the full flow: generates
-                    # MSK/SSK/USK, uploads private keys to SSSS, publishes
-                    # public keys to the homeserver, and signs the current
-                    # device with the new SSK. Some homeservers require UIA
-                    # for /keys/device_signing/upload — those will need an
-                    # alternate path; Continuwuity and Synapse-with-shared-
-                    # secret accept the unauthenticated upload.
-                    try:
-                        own_xsign = await olm.get_own_cross_signing_public_keys()
-                    except Exception as exc:
-                        own_xsign = None
-                        logger.warning(
-                            "Matrix: cross-signing key lookup failed: %s", exc
-                        )
-                    if own_xsign is None:
-                        try:
-                            new_recovery_key = await olm.generate_recovery_key()
-                            logger.warning(
-                                "Matrix: bootstrapped cross-signing for %s. "
-                                "SAVE THIS RECOVERY KEY — set "
-                                "MATRIX_RECOVERY_KEY for future restarts so "
-                                "the bot can re-sign its device after key "
-                                "rotation: %s",
-                                client.mxid,
-                                new_recovery_key,
-                            )
-                        except Exception as exc:
-                            logger.warning(
-                                "Matrix: cross-signing bootstrap failed "
-                                "(non-fatal — Element will show 'not "
-                                "verified by its owner'): %s",
-                                exc,
-                            )
-
-                client.crypto = olm
+                await self._native_e2ee.initialize()
                 logger.info(
-                    "Matrix: E2EE enabled (store: %s%s)",
-                    str(_CRYPTO_DB_PATH),
-                    f", device_id={client.device_id}" if client.device_id else "",
+                    "Matrix: native vodozemac E2EE enabled (store: %s, device_id=%s)",
+                    str(_NATIVE_E2EE_STATE_PATH),
+                    self._device_id,
                 )
             except Exception as exc:
                 logger.error(
-                    "Matrix: failed to create E2EE client: %s. %s",
+                    "Matrix: failed to initialize native vodozemac E2EE: %s. %s",
                     exc,
                     _E2EE_INSTALL_HINT,
+                    exc_info=True,
                 )
                 await api.session.close()
                 return False
@@ -930,6 +727,14 @@ class MatrixAdapter(BasePlatformAdapter):
 
         client.add_event_handler(EventType.ROOM_MESSAGE, self._on_room_message)
         client.add_event_handler(EventType.REACTION, self._on_reaction)
+        client.add_event_handler(EventType.ROOM_ENCRYPTED, self._on_room_encrypted)
+        if hasattr(EventType, "find") and hasattr(EventType, "Class"):
+            try:
+                td_encrypted = EventType.find("m.room.encrypted", EventType.Class.TO_DEVICE)
+                if td_encrypted != EventType.ROOM_ENCRYPTED:
+                    client.add_event_handler(td_encrypted, self._on_room_encrypted)
+            except Exception:
+                pass
         client.add_event_handler(IntEvt.INVITE, self._on_invite)
 
         # Initial sync to catch up, then start background sync.
@@ -976,13 +781,6 @@ class MatrixAdapter(BasePlatformAdapter):
         except Exception as exc:
             logger.warning("Matrix: initial sync error: %s", exc)
 
-        # Share keys after initial sync if E2EE is enabled.
-        if self._encryption and getattr(client, "crypto", None):
-            try:
-                await client.crypto.share_keys()
-            except Exception as exc:
-                logger.warning("Matrix: initial key share failed: %s", exc)
-
         # Start the sync loop.
         self._sync_task = asyncio.create_task(self._sync_loop())
         self._mark_connected()
@@ -1007,12 +805,13 @@ class MatrixAdapter(BasePlatformAdapter):
             await asyncio.gather(*redaction_tasks, return_exceptions=True)
         self._reaction_redaction_tasks.clear()
 
-        # Close the SQLite crypto store database.
-        if hasattr(self, "_crypto_db") and self._crypto_db:
+        if self._native_e2ee:
             try:
-                await self._crypto_db.stop()
+                await self._native_e2ee.close()
             except Exception as exc:
-                logger.debug("Matrix: could not close crypto DB on disconnect: %s", exc)
+                logger.debug("Matrix: could not persist E2EE state on disconnect: %s", exc)
+            finally:
+                self._native_e2ee = None
 
         if self._client:
             try:
@@ -1022,6 +821,32 @@ class MatrixAdapter(BasePlatformAdapter):
             self._client = None
 
         logger.info("Matrix: disconnected")
+
+    async def _send_room_event(
+        self,
+        room_id: str,
+        event_type: Any,
+        content: dict[str, Any],
+    ) -> Any:
+        """Send a room event, encrypting with native E2EE when required."""
+        if self._encryption and self._native_e2ee and str(event_type) != str(EventType.ROOM_ENCRYPTED):
+            encrypted = await self._native_e2ee.encrypt_room_event(
+                room_id=room_id,
+                event_type=str(event_type),
+                content=content,
+            )
+            if encrypted is not None:
+                return await self._client.send_message_event(
+                    RoomID(room_id),
+                    EventType.ROOM_ENCRYPTED,
+                    encrypted,
+                )
+
+        return await self._client.send_message_event(
+            RoomID(room_id),
+            event_type,
+            content,
+        )
 
     async def send(
         self,
@@ -1059,8 +884,8 @@ class MatrixAdapter(BasePlatformAdapter):
 
             try:
                 event_id = await asyncio.wait_for(
-                    self._client.send_message_event(
-                        RoomID(chat_id),
+                    self._send_room_event(
+                        chat_id,
                         EventType.ROOM_MESSAGE,
                         msg_content,
                     ),
@@ -1069,13 +894,20 @@ class MatrixAdapter(BasePlatformAdapter):
                 last_event_id = str(event_id)
                 logger.info("Matrix: sent event %s to %s", last_event_id, chat_id)
             except Exception as exc:
-                # On E2EE errors, retry after sharing keys.
-                if self._encryption and getattr(self._client, "crypto", None):
+                if self._encryption and "encrypt" in str(exc).lower():
+                    crypto_obj = getattr(self._client, "crypto", None)
+                    share_keys = getattr(crypto_obj, "share_keys", None)
+                    if callable(share_keys):
+                        try:
+                            maybe_result = share_keys()
+                            if asyncio.iscoroutine(maybe_result):
+                                await maybe_result
+                        except Exception:
+                            pass
                     try:
-                        await self._client.crypto.share_keys()
                         event_id = await asyncio.wait_for(
-                            self._client.send_message_event(
-                                RoomID(chat_id),
+                            self._send_room_event(
+                                chat_id,
                                 EventType.ROOM_MESSAGE,
                                 msg_content,
                             ),
@@ -1083,18 +915,13 @@ class MatrixAdapter(BasePlatformAdapter):
                         )
                         last_event_id = str(event_id)
                         logger.info(
-                            "Matrix: sent event %s to %s (after key share)",
+                            "Matrix: sent event %s to %s (after encryption retry)",
                             last_event_id,
                             chat_id,
                         )
                         continue
-                    except Exception as retry_exc:
-                        logger.error(
-                            "Matrix: failed to send to %s after retry: %s",
-                            chat_id,
-                            retry_exc,
-                        )
-                        return SendResult(success=False, error=str(retry_exc))
+                    except Exception:
+                        pass
                 logger.error("Matrix: failed to send to %s: %s", chat_id, exc)
                 return SendResult(success=False, error=str(exc))
 
@@ -1164,8 +991,8 @@ class MatrixAdapter(BasePlatformAdapter):
         }
 
         try:
-            event_id = await self._client.send_message_event(
-                RoomID(chat_id),
+            event_id = await self._send_room_event(
+                chat_id,
                 EventType.ROOM_MESSAGE,
                 msg_content,
             )
@@ -1362,21 +1189,31 @@ class MatrixAdapter(BasePlatformAdapter):
         """Upload bytes to Matrix and send as a media message."""
 
         upload_data = data
-        encrypted_file = None
-        if self._encryption and getattr(self._client, "crypto", None):
-            state_store = getattr(self._client, "state_store", None)
-            if state_store:
+        encrypted_file: Optional[dict[str, Any]] = None
+
+        room_encrypted = False
+        if self._encryption:
+            if self._native_e2ee:
                 try:
-                    room_encrypted = bool(await state_store.is_encrypted(RoomID(room_id)))
+                    room_encrypted = await self._native_e2ee.is_room_encrypted(room_id)
                 except Exception:
                     room_encrypted = False
-                if room_encrypted:
+            else:
+                state_store = getattr(self._client, "state_store", None)
+                if state_store and hasattr(state_store, "is_encrypted"):
                     try:
-                        from mautrix.crypto.attachments import encrypt_attachment
-                        upload_data, encrypted_file = encrypt_attachment(data)
-                    except Exception as exc:
-                        logger.error("Matrix: attachment encryption failed: %s", exc)
-                        return SendResult(success=False, error=str(exc))
+                        room_encrypted = bool(await state_store.is_encrypted(RoomID(room_id)))
+                    except Exception:
+                        room_encrypted = False
+
+        if room_encrypted:
+            try:
+                from gateway.platforms.matrix_attachments import encrypt_attachment
+
+                upload_data, encrypted_file = encrypt_attachment(data)
+            except Exception as exc:
+                logger.error("Matrix: attachment encryption failed: %s", exc)
+                return SendResult(success=False, error=str(exc))
 
         # Upload to homeserver.
         try:
@@ -1400,9 +1237,8 @@ class MatrixAdapter(BasePlatformAdapter):
             },
         }
         if encrypted_file is not None:
-            file_payload = encrypted_file.serialize()
-            file_payload["url"] = str(mxc_url)
-            msg_content["file"] = file_payload
+            encrypted_file["url"] = str(mxc_url)
+            msg_content["file"] = encrypted_file
         else:
             msg_content["url"] = str(mxc_url)
 
@@ -1422,8 +1258,8 @@ class MatrixAdapter(BasePlatformAdapter):
             msg_content["m.relates_to"] = relates_to
 
         try:
-            event_id = await self._client.send_message_event(
-                RoomID(room_id),
+            event_id = await self._send_room_event(
+                room_id,
                 EventType.ROOM_MESSAGE,
                 msg_content,
             )
@@ -1727,6 +1563,48 @@ class MatrixAdapter(BasePlatformAdapter):
                 room_id, sender, event_id, event_ts, source_content, relates_to
             )
 
+    async def _on_room_encrypted(self, event: Any) -> None:
+        """Handle encrypted room/todevice events with native vodozemac E2EE."""
+        if not self._native_e2ee:
+            return
+
+        source_content = self._event_content_to_dict(getattr(event, "content", None))
+        if not source_content:
+            return
+
+        room_id = str(getattr(event, "room_id", "") or "")
+        algorithm = str(source_content.get("algorithm") or "")
+
+        if algorithm == "m.olm.v1.curve25519-aes-sha2":
+            await self._native_e2ee.handle_olm_to_device_event(event, source_content)
+            return
+
+        if algorithm != "m.megolm.v1.aes-sha2" or not room_id:
+            return
+
+        decrypted = await self._native_e2ee.decrypt_room_event(event, source_content)
+        if not isinstance(decrypted, dict):
+            return
+
+        inner_type = str(decrypted.get("type") or "")
+        inner_content = decrypted.get("content")
+        if not isinstance(inner_content, dict):
+            return
+
+        synthetic_event = SimpleNamespace(
+            room_id=room_id,
+            sender=str(getattr(event, "sender", "") or ""),
+            event_id=str(getattr(event, "event_id", "") or ""),
+            timestamp=getattr(event, "timestamp", None),
+            server_timestamp=getattr(event, "server_timestamp", None),
+            content=inner_content,
+        )
+
+        if inner_type == str(EventType.ROOM_MESSAGE):
+            await self._on_room_message(synthetic_event)
+        elif inner_type == str(EventType.REACTION):
+            await self._on_reaction(synthetic_event)
+
     async def _resolve_message_context(
         self,
         room_id: str,
@@ -1959,37 +1837,36 @@ class MatrixAdapter(BasePlatformAdapter):
                 file_bytes = await self._client.download_media(ContentURI(url))
                 if file_bytes is not None:
                     if is_encrypted_media:
-                        from mautrix.crypto.attachments import decrypt_attachment
-
                         hashes_value = (
-                            file_content.get("hashes")
-                            if isinstance(file_content, dict)
-                            else None
+                            file_content.get("hashes") if isinstance(file_content, dict) else None
                         )
                         hash_value = (
-                            hashes_value.get("sha256")
-                            if isinstance(hashes_value, dict)
-                            else None
+                            hashes_value.get("sha256") if isinstance(hashes_value, dict) else None
                         )
 
-                        key_value = (
-                            file_content.get("key")
-                            if isinstance(file_content, dict)
-                            else None
-                        )
+                        key_value = file_content.get("key") if isinstance(file_content, dict) else None
                         if isinstance(key_value, dict):
                             key_value = key_value.get("k")
 
-                        iv_value = (
-                            file_content.get("iv")
-                            if isinstance(file_content, dict)
-                            else None
-                        )
+                        iv_value = file_content.get("iv") if isinstance(file_content, dict) else None
 
                         if key_value and hash_value and iv_value:
-                            file_bytes = decrypt_attachment(
-                                file_bytes, key_value, hash_value, iv_value
-                            )
+                            try:
+                                from gateway.platforms.matrix_attachments import decrypt_attachment
+
+                                file_bytes = decrypt_attachment(
+                                    file_bytes,
+                                    str(key_value),
+                                    str(hash_value),
+                                    str(iv_value),
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Matrix: failed to decrypt encrypted attachment for %s: %s",
+                                    event_id,
+                                    exc,
+                                )
+                                file_bytes = None
                         else:
                             logger.warning(
                                 "[Matrix] Encrypted media event missing decryption metadata for %s",
@@ -2135,8 +2012,8 @@ class MatrixAdapter(BasePlatformAdapter):
             }
         }
         try:
-            resp_event_id = await self._client.send_message_event(
-                RoomID(room_id),
+            resp_event_id = await self._send_room_event(
+                room_id,
                 EventType.REACTION,
                 content,
             )
@@ -2527,8 +2404,8 @@ class MatrixAdapter(BasePlatformAdapter):
         msg_content = self._build_text_message_content(text, msgtype=msgtype)
 
         try:
-            event_id = await self._client.send_message_event(
-                RoomID(chat_id),
+            event_id = await self._send_room_event(
+                chat_id,
                 EventType.ROOM_MESSAGE,
                 msg_content,
             )

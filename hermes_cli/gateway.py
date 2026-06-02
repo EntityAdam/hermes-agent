@@ -3702,7 +3702,7 @@ _PLATFORMS = [
             '     -d \'{"type":"m.login.password","user":"@bot:server","password":"..."}\'',
             "4. Alternatively, provide user ID + password and Hermes will log in directly",
             "5. For E2EE: set MATRIX_ENCRYPTION=true and install:",
-            "   pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks",
+            "   pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks cryptography",
             "6. To find your user ID: it's @username:your-server (shown in Element profile)",
         ],
         "vars": [

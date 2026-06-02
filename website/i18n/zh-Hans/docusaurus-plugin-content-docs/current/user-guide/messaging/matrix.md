@@ -243,10 +243,10 @@ E2EE 需要 Matrix Python 运行时依赖（`mautrix` + `vodozemac`）：
 
 ```bash
 # 直接安装 Matrix 运行时依赖
-pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
+pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks cryptography
 
 # Matrix 运行时依赖
-pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
+pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks cryptography
 ```
 
 ### 启用 E2EE
@@ -408,13 +408,13 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 **解决方法**：安装它：
 
 ```bash
-pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
+pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks cryptography
 ```
 
 或直接安装 Matrix 运行时依赖：
 
 ```bash
-pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
+pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks cryptography
 ```
 
 ### 加密错误/"无法解密事件"
@@ -575,7 +575,7 @@ services:
 ```dockerfile
 FROM python:3.11-slim
 
-RUN pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
+RUN pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks cryptography
 
 CMD ["hermes", "gateway"]
 ```

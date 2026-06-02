@@ -243,10 +243,10 @@ E2EE requires the Matrix Python runtime dependencies (`mautrix` + `vodozemac`):
 
 ```bash
 # Install Matrix runtime deps directly
-pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
+pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks cryptography
 
 # Matrix runtime dependencies
-pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
+pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks cryptography
 ```
 
 ### Enable E2EE
@@ -409,13 +409,13 @@ If this returns your user info, the token is valid. If it returns an error, gene
 **Fix**: Install it:
 
 ```bash
-pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
+pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks cryptography
 ```
 
 Or install all Matrix runtime dependencies directly:
 
 ```bash
-pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
+pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks cryptography
 ```
 
 ### Encryption errors / "could not decrypt event"
@@ -594,7 +594,7 @@ services:
 ```dockerfile
 FROM python:3.11-slim
 
-RUN pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
+RUN pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks cryptography
 
 CMD ["hermes", "gateway"]
 ```

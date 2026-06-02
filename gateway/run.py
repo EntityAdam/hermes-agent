@@ -6789,7 +6789,7 @@ class GatewayRunner:
             if not check_matrix_requirements():
                 logger.warning(
                     "Matrix: dependencies not installed or credentials not set. "
-                    "Run: pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks"
+                    "Run: pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks cryptography"
                 )
                 return None
             return MatrixAdapter(config)

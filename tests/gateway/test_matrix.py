@@ -1017,7 +1017,7 @@ class TestMatrixE2EEHardFail:
 
     @pytest.mark.asyncio
     async def test_connect_fails_when_crypto_setup_raises(self):
-        """Even if _check_e2ee_deps passes, if OlmMachine raises, hard-fail."""
+        """Even if deps pass, native vodozemac init failure should hard-fail."""
         from gateway.platforms.matrix import MatrixAdapter
 
         config = PlatformConfig(
@@ -1042,14 +1042,21 @@ class TestMatrixE2EEHardFail:
         mock_client.mxid = "@bot:example.org"
         mock_client.device_id = None
         mock_client.crypto = None
+        mock_client.sync = AsyncMock(return_value={"rooms": {"join": {}}})
+        mock_client.add_event_handler = MagicMock()
+        mock_client.add_dispatcher = MagicMock()
+        mock_client.handle_sync = MagicMock(return_value=[])
 
         fake_mautrix_mods["mautrix.client"].Client = MagicMock(return_value=mock_client)
-        fake_mautrix_mods["mautrix.crypto"].OlmMachine = MagicMock(side_effect=Exception("olm init failed"))
 
         from gateway.platforms import matrix as matrix_mod
+        mock_native_e2ee = MagicMock()
+        mock_native_e2ee.initialize = AsyncMock(side_effect=Exception("native init failed"))
         with patch.object(matrix_mod, "_check_e2ee_deps", return_value=True):
             with patch.dict("sys.modules", fake_mautrix_mods):
-                result = await adapter.connect()
+                with patch.object(matrix_mod, "NativeVodozemacE2EE", return_value=mock_native_e2ee):
+                    with patch.object(adapter, "_sync_loop", AsyncMock(return_value=None)):
+                        result = await adapter.connect()
 
         assert result is False
 
@@ -1481,7 +1488,7 @@ class TestMatrixEncryptedEventHandler:
 
     @pytest.mark.asyncio
     async def test_connect_fails_on_stale_otk_conflict(self):
-        """connect() must refuse E2EE when OTK upload hits 'already exists'."""
+        """connect() must refuse E2EE when native key bootstrap reports conflict."""
         from gateway.platforms.matrix import MatrixAdapter
 
         config = PlatformConfig(
@@ -1515,26 +1522,21 @@ class TestMatrixEncryptedEventHandler:
         mock_client.api.token = "syt_test_token"
         mock_client.api.session = MagicMock()
         mock_client.api.session.close = AsyncMock()
-
-        # share_keys succeeds on first call (from _verify_device_keys_on_server),
-        # then raises "already exists" on the proactive OTK flush in connect().
-        mock_olm = MagicMock()
-        mock_olm.load = AsyncMock()
-        mock_olm.share_keys = AsyncMock(
-            side_effect=[None, Exception("One time key signed_curve25519:AAAAAQ already exists")]
-        )
-        mock_olm.share_keys_min_trust = None
-        mock_olm.send_keys_min_trust = None
-        mock_olm.account = MagicMock()
-        mock_olm.account.identity_keys = {"ed25519": "fake_ed25519_key"}
+        mock_client.sync = AsyncMock(return_value={"rooms": {"join": {}}})
+        mock_client.handle_sync = MagicMock(return_value=[])
 
         fake_mautrix_mods["mautrix.client"].Client = MagicMock(return_value=mock_client)
-        fake_mautrix_mods["mautrix.crypto"].OlmMachine = MagicMock(return_value=mock_olm)
 
         from gateway.platforms import matrix as matrix_mod
+        mock_native_e2ee = MagicMock()
+        mock_native_e2ee.initialize = AsyncMock(
+            side_effect=Exception("One time key signed_curve25519:AAAAAQ already exists")
+        )
         with patch.object(matrix_mod, "_check_e2ee_deps", return_value=True):
             with patch.dict("sys.modules", fake_mautrix_mods):
-                result = await adapter.connect()
+                with patch.object(matrix_mod, "NativeVodozemacE2EE", return_value=mock_native_e2ee):
+                    with patch.object(adapter, "_sync_loop", AsyncMock(return_value=None)):
+                        result = await adapter.connect()
 
         assert result is False
 

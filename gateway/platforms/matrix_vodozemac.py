@@ -8,6 +8,7 @@ Matrix protocol behavior themselves.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 from typing import Any
 
@@ -28,6 +29,14 @@ def _to_bytes(value: bytes | str) -> bytes:
 
 def _to_text(value: bytes | str) -> str:
     return value.decode("utf-8") if isinstance(value, bytes) else value
+
+
+def _key_to_base64(key: Any) -> str:
+    if isinstance(key, str):
+        return key
+    if hasattr(key, "to_base64"):
+        return key.to_base64()
+    return str(key)
 
 
 def _require_vodozemac() -> Any:
@@ -73,8 +82,8 @@ def create_account() -> Any:
 def account_identity_keys(account: Any) -> dict[str, str]:
     """Return account identity keys in Matrix upload format."""
     return {
-        "ed25519": account.ed25519_key,
-        "curve25519": account.curve25519_key,
+        "ed25519": _key_to_base64(account.ed25519_key),
+        "curve25519": _key_to_base64(account.curve25519_key),
     }
 
 
@@ -89,7 +98,7 @@ def sign(account: Any, message: str) -> str:
 def generate_one_time_keys(account: Any, count: int) -> dict[str, str]:
     """Generate one-time keys and return the updated one-time-key map."""
     account.generate_one_time_keys(count)
-    return dict(account.one_time_keys)
+    return {str(key_id): _key_to_base64(key) for key_id, key in account.one_time_keys.items()}
 
 
 def mark_keys_as_published(account: Any) -> None:
@@ -100,7 +109,7 @@ def mark_keys_as_published(account: Any) -> None:
 def generate_fallback_key(account: Any) -> dict[str, str]:
     """Generate and return fallback keys for this account."""
     account.generate_fallback_key()
-    return dict(account.fallback_key)
+    return {str(key_id): _key_to_base64(key) for key_id, key in account.fallback_key.items()}
 
 
 def create_outbound_olm_session(account: Any, identity_key: str, one_time_key: str) -> Any:
@@ -157,6 +166,20 @@ def decrypt_megolm(session: Any, ciphertext: str) -> tuple[str, int]:
     """Decrypt a Megolm message and return plaintext with message index."""
     decrypted = session.decrypt(ciphertext)
     return _to_text(decrypted.plaintext), int(decrypted.message_index)
+
+
+def olm_message_to_matrix_parts(message: Any) -> tuple[int, str]:
+    """Convert AnyOlmMessage to Matrix wire ``type`` + base64 body."""
+    msg_type, body = message.to_parts()
+    body_bytes = _to_bytes(body)
+    return int(msg_type), base64.b64encode(body_bytes).decode("ascii")
+
+
+def olm_message_from_matrix_parts(message_type: int, body_b64: str) -> Any:
+    """Build AnyOlmMessage from Matrix wire ``type`` + base64 body."""
+    vz = _require_vodozemac()
+    body = base64.b64decode(body_b64)
+    return vz.AnyOlmMessage.from_parts(int(message_type), body)
 
 
 def pickle_account(account: Any, pickle_key: bytes | str) -> str:
