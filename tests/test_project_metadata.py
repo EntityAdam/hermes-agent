@@ -19,15 +19,13 @@ def _load_package_data():
 
 
 def test_matrix_extra_not_in_all():
-    """The [matrix] extra pulls `mautrix[encryption]` -> `python-olm`,
-    which has Linux-only wheels and no native build path on Windows or
-    modern macOS (archived libolm, C++ errors with Clang 21+).
+    """The [matrix] extra is intentionally excluded from [all].
 
-    With matrix in [all], `uv sync --locked` on Windows tried to build
-    python-olm from sdist and failed on `make`. As of 2026-05-12 the
-    [matrix] extra is excluded from [all] entirely and routed through
-    `tools/lazy_deps.py` (LAZY_DEPS["platform.matrix"]) — installs at
-    first use, where the user is expected to have a toolchain.
+    Matrix support is an opt-in messaging backend with a heavier runtime
+    stack than core Hermes usage. We keep it lazy-installed via
+    `tools/lazy_deps.py` (LAZY_DEPS["platform.matrix"]) so fresh installs
+    don't eagerly pull Matrix-specific dependencies for users who never
+    enable Matrix.
     """
     optional_dependencies = _load_optional_dependencies()
 

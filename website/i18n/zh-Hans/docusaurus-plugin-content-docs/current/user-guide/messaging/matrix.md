@@ -239,27 +239,14 @@ Hermes 支持 Matrix 端对端加密，你可以在加密房间中与机器人�
 
 ### 前提条件
 
-E2EE 需要带有加密扩展的 `mautrix` 库以及 `libolm` C 库：
+E2EE 需要 Matrix Python 运行时依赖（`mautrix` + `vodozemac`）：
 
 ```bash
-# 安装带 E2EE 支持的 mautrix
-pip install 'mautrix[encryption]'
+# 直接安装 Matrix 运行时依赖
+pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
 
 # 或通过 hermes extras 安装
 pip install 'hermes-agent[matrix]'
-```
-
-你还需要在系统上安装 `libolm`：
-
-```bash
-# Debian/Ubuntu
-sudo apt install libolm-dev
-
-# macOS
-brew install libolm
-
-# Fedora
-sudo dnf install libolm-devel
 ```
 
 ### 启用 E2EE
@@ -326,7 +313,7 @@ Hermes 在启动时会检测到此情况并拒绝启用 E2EE，日志显示：`d
 :::
 
 :::info
-如果未安装 `mautrix[encryption]` 或缺少 `libolm`，机器人会自动回退到普通（未加密）客户端。你会在日志中看到警告。
+如果缺少 Matrix E2EE 运行时依赖，机器人会自动回退到普通（未加密）客户端。你会在日志中看到警告。
 :::
 
 ## 主房间
@@ -421,7 +408,7 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 **解决方法**：安装它：
 
 ```bash
-pip install 'mautrix[encryption]'
+pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
 ```
 
 或通过 Hermes extras：
@@ -432,10 +419,10 @@ pip install 'hermes-agent[matrix]'
 
 ### 加密错误/"无法解密事件"
 
-**原因**：缺少加密密钥、未安装 `libolm`，或机器人设备未被信任。
+**原因**：缺少加密密钥、缺少 Matrix E2EE 运行时依赖，或机器人设备未被信任。
 
 **解决方法**：
-1. 确认系统上已安装 `libolm`（参见上方 E2EE 章节）。
+1. 确认已安装 Matrix E2EE 运行时依赖（参见上方 E2EE 章节）。
 2. 确保 `.env` 中设置了 `MATRIX_ENCRYPTION=true`。
 3. 在你的 Matrix 客户端（Element）中，进入机器人的个人资料 → 会话 → 验证/信任机器人的设备。
 4. 如果机器人刚加入加密房间，它只能解密*加入后*发送的消息。更早的消息无法访问。
@@ -506,9 +493,9 @@ pip install 'hermes-agent[matrix]'
 **为什么需要新的访问令牌？** 每个 Matrix 访问令牌绑定到特定的设备 ID。使用相同设备 ID 但新的加密密钥会导致其他 Matrix 客户端不信任该设备（它们将身份密钥的变更视为潜在的安全漏洞）。新的访问令牌获得一个没有过期密钥历史的新设备 ID，其他客户端会立即信任它。
 :::
 
-## 代理模式（macOS 上的 E2EE）
+## 代理模式（可选）
 
-Matrix E2EE 需要 `libolm`，而该库无法在 macOS ARM64（Apple Silicon）上编译。`hermes-agent[matrix]` extra 仅限 Linux。如果你在 macOS 上，代理模式允许你在 Linux 虚拟机的 Docker 容器中运行 E2EE，而实际的 agent 在 macOS 上原生运行，可完整访问你的本地文件、记忆和技能。
+当你希望把 Matrix 网关流量隔离在容器中，同时让主 Hermes agent 继续在主机运行时，代理模式依然有用。
 
 ### 工作原理
 
@@ -588,7 +575,6 @@ services:
 ```dockerfile
 FROM python:3.11-slim
 
-RUN apt-get update && apt-get install -y libolm-dev && rm -rf /var/lib/apt/lists/*
 RUN pip install 'hermes-agent[matrix]'
 
 CMD ["hermes", "gateway"]

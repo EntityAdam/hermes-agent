@@ -1432,9 +1432,8 @@ install_deps() {
         # Critical flag choice: `--extra all`, NOT `--all-extras`.
         #   --all-extras = every [project.optional-dependencies] key.
         #                  This bypasses the curated `[all]` extra
-        #                  entirely and pulls e.g. [matrix] (which
-        #                  needs python-olm + make on Windows) and
-        #                  [rl] (git+https deps that fail offline).
+        #                  entirely and pulls optional backends that
+        #                  are intentionally deferred to lazy-install.
         #   --extra all  = install just the `[all]` extra's contents.
         #                  This respects the curation in pyproject.toml.
         # uv's own progress UI handles TTY detection and downgrades
@@ -1465,7 +1464,7 @@ install_deps() {
     #         contains, edit pyproject.toml only.
     # Tier 3: bare `.` — last-resort so at least the core CLI launches.
     #         Skipped tiers like "PyPI-only extras (no git deps)" used to
-    #         exist to dodge [rl] / [matrix] git+sdist deps; those are no
+    #         exist for historical optional-backend failures; those are no
     #         longer in [all] post-2026-05-12 lazy-install migration, so
     #         a separate PyPI-only tier had no remaining content.
     local _BROKEN_EXTRAS=()  # populate when an extra becomes unresolvable

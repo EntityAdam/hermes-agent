@@ -244,11 +244,10 @@ else
         echo -e "${CYAN}→${NC} (first run on a fresh venv can take 1-5 minutes; uv prints progress below)"
         # Critical flag choice: `--extra all`, NOT `--all-extras`. The
         # latter installs every [project.optional-dependencies] key,
-        # bypassing the curated [all] extra and pulling backends like
-        # [matrix] (python-olm needs make on Windows) and [rl] (git+https
-        # deps that fail offline). See pyproject.toml's [all] for the
-        # curated set, and tools/lazy_deps.py for backends that install
-        # at first use.
+        # bypassing the curated [all] extra and pulling optional backends
+        # that are intentionally lazy-installed at first use.
+        # See pyproject.toml's [all] for the curated set, and
+        # tools/lazy_deps.py for deferred backend installs.
         # Also: stream stderr through directly so the user sees uv's
         # progress UI instead of staring at a frozen prompt.
         if UV_PROJECT_ENVIRONMENT="$SCRIPT_DIR/venv" $UV_CMD sync --extra all --locked; then

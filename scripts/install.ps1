@@ -1311,10 +1311,9 @@ function Install-Dependencies {
         Write-Info "Trying tier: hash-verified (uv.lock) ..."
         # Critical flag choice: `--extra all`, NOT `--all-extras`.
         #   --all-extras = every [project.optional-dependencies] key,
-        #                  bypassing the curated [all] extra. On Windows
-        #                  that means [matrix] -> python-olm (no wheel,
-        #                  needs `make` to build from sdist) and the
-        #                  install fails.
+        #                  bypassing the curated [all] extra and forcing
+        #                  optional backend deps that are intentionally
+        #                  lazy-installed.
         #   --extra all  = just the [all] extra's contents (curated).
         #
         # UV_PROJECT_ENVIRONMENT pins the sync target to our venv\.

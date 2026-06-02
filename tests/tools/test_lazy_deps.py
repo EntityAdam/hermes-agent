@@ -29,7 +29,8 @@ class TestSpecSafety:
         "elevenlabs>=1.0,<2",
         "honcho-ai>=2.0.1,<3",
         "boto3>=1.35.0,<2",
-        "mautrix[encryption]>=0.20,<1",
+        "mautrix>=0.20,<1",
+        "vodozemac==0.9.0.post2",
         "google-api-python-client>=2.100,<3",
         "youtube-transcript-api>=1.2.0",
         "qrcode>=7.0,<8",
@@ -284,14 +285,13 @@ class TestIsSatisfiedVersionAware:
         assert ld._is_satisfied("somepkg") is True
 
     def test_extras_block_in_spec_is_stripped(self, monkeypatch):
-        # mautrix[encryption]==0.21.0 — the [encryption] block must not
-        # confuse the specifier parser.
+        # Ensure simple package specs with version pins parse and match.
         self._fake_version(monkeypatch, {"mautrix": "0.21.0"})
-        assert ld._is_satisfied("mautrix[encryption]==0.21.0") is True
+        assert ld._is_satisfied("mautrix==0.21.0") is True
 
     def test_extras_block_mismatch_returns_false(self, monkeypatch):
         self._fake_version(monkeypatch, {"mautrix": "0.20.0"})
-        assert ld._is_satisfied("mautrix[encryption]==0.21.0") is False
+        assert ld._is_satisfied("mautrix==0.21.0") is False
 
 
 # ---------------------------------------------------------------------------

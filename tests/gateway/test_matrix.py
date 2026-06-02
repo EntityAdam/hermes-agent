@@ -753,7 +753,7 @@ class TestMatrixRequirements:
         assert check_matrix_requirements() is False
 
     def test_check_requirements_encryption_true_no_e2ee_deps(self, monkeypatch):
-        """MATRIX_ENCRYPTION=true should fail if python-olm is not installed."""
+        """MATRIX_ENCRYPTION=true should fail if E2EE deps are unavailable."""
         monkeypatch.setenv("MATRIX_ACCESS_TOKEN", "syt_test")
         monkeypatch.setenv("MATRIX_HOMESERVER", "https://matrix.example.org")
         monkeypatch.setenv("MATRIX_ENCRYPTION", "true")
@@ -797,11 +797,9 @@ class TestMatrixRequirements:
     def test_check_e2ee_deps_requires_asyncpg(self, monkeypatch):
         """E2EE deps check must reject when asyncpg is missing — even if olm is present.
 
-        Regression for #31116: ``mautrix[encryption]`` extra installs python-olm
-        but NOT asyncpg/aiosqlite, which are required by mautrix's crypto store
-        at connect time.  ``_check_e2ee_deps`` previously only tested
-        ``OlmMachine`` import and returned True, so the failure manifested as
-        a confusing ``No module named 'asyncpg'`` deep in
+        Regression for #31116: partial Matrix installs can leave DB drivers
+        missing even when core crypto modules are importable. The failure
+        otherwise manifests as ``No module named 'asyncpg'`` deep in
         ``MatrixAdapter.connect()``.
         """
         from gateway.platforms.matrix import _check_e2ee_deps

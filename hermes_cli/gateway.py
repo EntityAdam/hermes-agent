@@ -3701,7 +3701,7 @@ _PLATFORMS = [
             "   Or via API: curl -X POST https://your-server/_matrix/client/v3/login \\",
             '     -d \'{"type":"m.login.password","user":"@bot:server","password":"..."}\'',
             "4. Alternatively, provide user ID + password and Hermes will log in directly",
-            "5. For E2EE: set MATRIX_ENCRYPTION=true (requires pip install 'mautrix[encryption]')",
+            "5. For E2EE: set MATRIX_ENCRYPTION=true (install with pip install 'hermes-agent[matrix]')",
             "6. To find your user ID: it's @username:your-server (shown in Element profile)",
         ],
         "vars": [
@@ -4198,14 +4198,8 @@ def _all_platforms() -> list[dict]:
     Built-ins keep their dict shape; plugin entries are adapted to the same
     shape with ``_registry_entry`` holding the source.
 
-    Platform-specific gating: some platforms can't be configured on
-    every host. Currently:
-      - Matrix is hidden on Windows. The [matrix] extra pulls
-        ``mautrix[encryption]`` -> ``python-olm``, which has no Windows
-        wheel and needs ``make`` + libolm to build from sdist. There's
-        no native Windows path that works, so we don't offer it in the
-        picker. Users who want Matrix on Windows can run hermes under
-        WSL.
+        Platform-specific gating: some platforms can't be configured on
+        every host. Matrix is no longer hard-hidden on Windows.
     """
     # Populate the registry so plugin platforms are visible. Idempotent.
     # Bundled platform plugins (``kind: platform``) auto-load unconditionally,
@@ -4221,9 +4215,7 @@ def _all_platforms() -> list[dict]:
 
     platforms = [dict(p) for p in _PLATFORMS]
 
-    # Drop platforms that can't function on this host. See docstring.
-    if sys.platform == "win32":
-        platforms = [p for p in platforms if p.get("key") != "matrix"]
+    # Host-specific filtering belongs here if a platform has hard blockers.
 
     by_key = {p["key"]: p for p in platforms}
 

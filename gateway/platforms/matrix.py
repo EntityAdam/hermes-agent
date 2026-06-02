@@ -2,7 +2,8 @@
 
 Connects to any Matrix homeserver (self-hosted or matrix.org) via the
 mautrix Python SDK.  Supports optional end-to-end encryption (E2EE)
-when installed with ``pip install "mautrix[encryption]"``.
+when installed with the Matrix runtime dependencies (``mautrix`` +
+``vodozemac``).
 
 Environment variables:
     MATRIX_HOMESERVER           Homeserver URL (e.g. https://matrix.example.org)
@@ -94,6 +95,7 @@ except ImportError:
     TrustState = _TrustStateStub  # type: ignore[misc,assignment]
 
 from gateway.config import Platform, PlatformConfig
+from gateway.platforms.matrix_vodozemac import has_required_bindings
 from gateway.platforms.base import (
     BasePlatformAdapter,
     MessageEvent,
@@ -138,8 +140,8 @@ _OUTBOUND_MENTION_RE = re.compile(
 )
 
 _E2EE_INSTALL_HINT = (
-    "Install with: pip install 'mautrix[encryption]' asyncpg aiosqlite  "
-    "(requires libolm C library)"
+    "Install with: pip install 'hermes-agent[matrix]'  "
+    "(or: pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks)"
 )
 
 _MATRIX_IMAGE_FILENAME_EXTS = frozenset({
@@ -215,18 +217,19 @@ def _create_matrix_session(proxy_url: str | None):
 
 
 def _check_e2ee_deps() -> bool:
-    """Return True if mautrix E2EE dependencies are available.
+    """Return True if Matrix E2EE dependencies are available.
 
-    Verifies python-olm (via mautrix.crypto.OlmMachine), the SQLite crypto
-    store backend (mautrix.crypto.store.asyncpg.PgCryptoStore — yes, the
-    PgCryptoStore class also drives the sqlite backend in mautrix 0.21),
-    and the database drivers actually used at connect time (``asyncpg`` for
-    the underlying upgrade_table machinery, ``aiosqlite`` for the
-    ``sqlite:///`` URL we pass to ``Database.create``).  Without all four,
-    encrypted rooms fail at connect time with a confusing
-    ``No module named 'asyncpg'`` (#31116).
+    Verifies vodozemac bindings are importable and expose core Olm/Megolm
+    primitives, plus the mautrix crypto store backend and the DB drivers
+    used at connect time (``asyncpg`` and ``aiosqlite``).
+
+    Without the full set, encrypted rooms fail at connect time with runtime
+    import errors (for example ``No module named 'asyncpg'``).
     """
     try:
+        if not has_required_bindings():
+            return False
+
         from mautrix.crypto import OlmMachine  # noqa: F401
         from mautrix.crypto.store.asyncpg import PgCryptoStore  # noqa: F401
         import asyncpg  # noqa: F401
@@ -261,8 +264,7 @@ def check_matrix_requirements() -> bool:
 
     # Check whether any package in the platform.matrix feature group is
     # missing.  ``feature_missing`` is cheap (per-spec importlib.metadata
-    # lookups) and correctly handles ``mautrix[encryption]`` by stripping
-    # the extras marker before checking the bare package.
+    # lookups) and checks every declared platform.matrix requirement.
     try:
         from tools.lazy_deps import feature_missing, ensure_and_bind
         missing = feature_missing("platform.matrix")
@@ -296,8 +298,7 @@ def check_matrix_requirements() -> bool:
         if not ensure_and_bind("platform.matrix", _import, globals(), prompt=False):
             logger.warning(
                 "Matrix: required packages not installed (%s). "
-                "Run: pip install 'mautrix[encryption]' asyncpg aiosqlite "
-                "Markdown aiohttp-socks",
+                "Run: pip install 'hermes-agent[matrix]'",
                 ", ".join(missing) if missing else "platform.matrix",
             )
             return False

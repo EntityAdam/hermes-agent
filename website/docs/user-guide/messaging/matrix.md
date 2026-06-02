@@ -239,27 +239,14 @@ Hermes supports Matrix end-to-end encryption, so you can chat with your bot in e
 
 ### Requirements
 
-E2EE requires the `mautrix` library with encryption extras and the `libolm` C library:
+E2EE requires the Matrix Python runtime dependencies (`mautrix` + `vodozemac`):
 
 ```bash
-# Install mautrix with E2EE support
-pip install 'mautrix[encryption]'
+# Install Matrix runtime deps directly
+pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
 
 # Or install with hermes extras
 pip install 'hermes-agent[matrix]'
-```
-
-You also need `libolm` installed on your system:
-
-```bash
-# Debian/Ubuntu
-sudo apt install libolm-dev
-
-# macOS
-brew install libolm
-
-# Fedora
-sudo dnf install libolm-devel
 ```
 
 ### Enable E2EE
@@ -326,7 +313,7 @@ Other Matrix clients (Element, matrix-commander) may cache the old device keys. 
 :::
 
 :::info
-If `mautrix[encryption]` is not installed or `libolm` is missing, the bot falls back to a plain (unencrypted) client automatically. You'll see a warning in the logs.
+If Matrix E2EE dependencies are missing, the bot falls back to a plain (unencrypted) client automatically. You'll see a warning in the logs.
 :::
 
 ## Home Room
@@ -422,7 +409,7 @@ If this returns your user info, the token is valid. If it returns an error, gene
 **Fix**: Install it:
 
 ```bash
-pip install 'mautrix[encryption]'
+pip install mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks
 ```
 
 Or with Hermes extras:
@@ -433,10 +420,10 @@ pip install 'hermes-agent[matrix]'
 
 ### Encryption errors / "could not decrypt event"
 
-**Cause**: Missing encryption keys, `libolm` not installed, or the bot's device isn't trusted.
+**Cause**: Missing encryption keys, missing Matrix E2EE runtime dependencies, or the bot's device isn't trusted.
 
 **Fix**:
-1. Verify `libolm` is installed on your system (see the E2EE section above).
+1. Verify Matrix E2EE dependencies are installed (see the E2EE section above).
 2. Make sure `MATRIX_ENCRYPTION=true` is set in your `.env`.
 3. In your Matrix client (Element), go to the bot's profile -> Sessions -> verify/trust the bot's device.
 4. If the bot just joined an encrypted room, it can only decrypt messages sent *after* it joined. Older messages are inaccessible.
@@ -525,9 +512,9 @@ security breach). A new access token gets a new device ID with no stale key
 history, so other clients trust it immediately.
 :::
 
-## Proxy Mode (E2EE on macOS)
+## Proxy Mode (Optional)
 
-Matrix E2EE requires `libolm`, which doesn't compile on macOS ARM64 (Apple Silicon). The `hermes-agent[matrix]` extra is gated to Linux only. If you're on macOS, proxy mode lets you run E2EE in a Docker container on a Linux VM while the actual agent runs natively on macOS with full access to your local files, memory, and skills.
+Proxy mode remains useful when you want to isolate Matrix gateway traffic in a container while keeping the primary Hermes agent on your host machine.
 
 ### How It Works
 
@@ -607,7 +594,6 @@ services:
 ```dockerfile
 FROM python:3.11-slim
 
-RUN apt-get update && apt-get install -y libolm-dev && rm -rf /var/lib/apt/lists/*
 RUN pip install 'hermes-agent[matrix]'
 
 CMD ["hermes", "gateway"]

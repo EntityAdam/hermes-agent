@@ -1861,28 +1861,23 @@ def _setup_matrix():
             save_env_value("MATRIX_ENCRYPTION", "true")
             print_success("E2EE enabled")
 
-        matrix_pkg = "mautrix[encryption]" if want_e2ee else "mautrix"
         # Use the central lazy-deps feature group so we install ALL of
-        # platform.matrix's dependencies (mautrix, Markdown, aiosqlite,
-        # asyncpg, aiohttp-socks) — not just mautrix itself.  The previous
-        # hand-rolled ``pip install mautrix[encryption]`` left asyncpg /
-        # aiosqlite uninstalled and broke E2EE connect with
-        # ``No module named 'asyncpg'`` on every fresh install (#31116).
+        # platform.matrix's dependencies (mautrix, vodozemac, Markdown,
+        # aiosqlite, asyncpg, aiohttp-socks) in one path.
         try:
             from tools.lazy_deps import ensure as _lazy_ensure, feature_missing
             _missing_before = feature_missing("platform.matrix")
             if _missing_before:
                 print_info(
-                    f"Installing {matrix_pkg} (+ {len(_missing_before)} runtime deps)..."
+                    f"Installing Matrix runtime deps (+ {len(_missing_before)} packages)..."
                 )
                 try:
                     _lazy_ensure("platform.matrix", prompt=False)
-                    print_success(f"{matrix_pkg} installed")
+                    print_success("Matrix runtime dependencies installed")
                 except Exception as exc:
                     print_warning(
                         f"Install failed — run manually: pip install "
-                        f"'mautrix[encryption]' asyncpg aiosqlite Markdown "
-                        f"aiohttp-socks"
+                        f"mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks"
                     )
                     print_info(f"  Error: {exc}")
         except ImportError:
@@ -1891,26 +1886,28 @@ def _setup_matrix():
             # path so the wizard still does *something*.
             try:
                 __import__("mautrix")
+                __import__("vodozemac")
             except ImportError:
-                print_info(f"Installing {matrix_pkg}...")
+                print_info("Installing Matrix runtime dependencies...")
                 import subprocess
                 uv_bin = shutil.which("uv")
+                matrix_pkgs = ["mautrix", "vodozemac", "asyncpg", "aiosqlite", "Markdown", "aiohttp-socks"]
                 if uv_bin:
                     result = subprocess.run(
-                        [uv_bin, "pip", "install", "--python", sys.executable, matrix_pkg],
+                        [uv_bin, "pip", "install", "--python", sys.executable, *matrix_pkgs],
                         capture_output=True, text=True,
                     )
                 else:
                     result = subprocess.run(
-                        [sys.executable, "-m", "pip", "install", matrix_pkg],
+                        [sys.executable, "-m", "pip", "install", *matrix_pkgs],
                         capture_output=True, text=True,
                     )
                 if result.returncode == 0:
-                    print_success(f"{matrix_pkg} installed")
+                    print_success("Matrix runtime dependencies installed")
                 else:
                     print_warning(
                         f"Install failed — run manually: pip install "
-                        f"'{matrix_pkg}' asyncpg aiosqlite Markdown aiohttp-socks"
+                        f"mautrix vodozemac asyncpg aiosqlite Markdown aiohttp-socks"
                     )
                     if result.stderr:
                         print_info(f"  Error: {result.stderr.strip().splitlines()[-1]}")

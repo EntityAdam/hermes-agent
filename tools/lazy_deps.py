@@ -134,7 +134,8 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
         "aiohttp==3.13.4",  # CVE-2026-34513/34518/34519/34520/34525
     ),
     "platform.matrix": (
-        "mautrix[encryption]==0.21.0",
+        "mautrix==0.21.0",
+        "vodozemac==0.9.0.post2",
         "Markdown==3.10.2",
         "aiosqlite==0.22.1",
         "asyncpg==0.31.0",
@@ -257,7 +258,7 @@ def _pkg_name_from_spec(spec: str) -> str:
     """Extract the bare package name from a pip spec.
 
     ``"slack-bolt>=1.18.0,<2"`` → ``"slack-bolt"``
-    ``"mautrix[encryption]>=0.20"`` → ``"mautrix"``
+    ``"mautrix>=0.20"`` → ``"mautrix"``
     """
     m = re.match(r"^([A-Za-z0-9_][A-Za-z0-9_.\-]*)", spec)
     return m.group(1) if m else spec
@@ -267,7 +268,7 @@ def _specifier_from_spec(spec: str) -> str:
     """Extract just the version-specifier portion of a pip spec.
 
     ``"honcho-ai==2.0.1"`` → ``"==2.0.1"``
-    ``"mautrix[encryption]>=0.20,<1"`` → ``">=0.20,<1"``
+    ``"mautrix>=0.20,<1"`` → ``">=0.20,<1"``
     ``"package"`` → ``""`` (no version constraint)
     """
     # Strip the package name + optional [extras] block.
